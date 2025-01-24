@@ -1,0 +1,5 @@
+
+# Ignore environment configuration file
+.env
+
+# ...existing code...
