@@ -6,7 +6,7 @@ import (
     "sync"
     "time"
     
-    "broker_clickhouse/utils"
+    "angelone_clickhouse/utils"
     "github.com/sony/gobreaker"
 )
 

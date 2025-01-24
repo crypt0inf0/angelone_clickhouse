@@ -5,7 +5,7 @@ import (
 
     "github.com/prometheus/client_golang/prometheus"
     "github.com/prometheus/client_golang/prometheus/promauto"
-    "broker_clickhouse/config"
+    "angelone_clickhouse/config"
     dto "github.com/prometheus/client_model/go"
     "fmt"
 )

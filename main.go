@@ -1,14 +1,14 @@
 package main
 
 import (
-	"broker_clickhouse/angel"
-	"broker_clickhouse/config"
-	"broker_clickhouse/db"
-	"broker_clickhouse/metrics"
-	"broker_clickhouse/models"
-	"broker_clickhouse/parser"
-	"broker_clickhouse/utils"
-	"broker_clickhouse/ws"
+	"angelone_clickhouse/angel"
+	"angelone_clickhouse/config"
+	"angelone_clickhouse/db"
+	"angelone_clickhouse/metrics"
+	"angelone_clickhouse/models"
+	"angelone_clickhouse/parser"
+	"angelone_clickhouse/utils"
+	"angelone_clickhouse/ws"
 	"context"
 	"log"
 	"net/http"

@@ -1,4 +1,4 @@
-module broker_clickhouse
+module angelone_clickhouse
 
 go 1.21
 

@@ -34,8 +34,8 @@ High-performance market data processing system that captures real-time stock mar
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/crypt0inf0/broker_clickhouse.git
-cd broker_clickhouse
+git clone https://github.com/crypt0inf0/angelone_clickhouse.git
+cd angelone_clickhouse
 ```
 
 2. Install dependencies:
@@ -99,7 +99,7 @@ SELECT * FROM angelone_market_data WHERE token = '2885' LIMIT 5;
 ## Project Structure
 
 ```
-broker_clickhouse/
+angelone_clickhouse/
 ├── angel/         # AngelOne specific types and utils
 ├── db/           # ClickHouse database operations
 ├── models/       # Data models

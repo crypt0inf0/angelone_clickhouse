@@ -6,8 +6,8 @@ import (
 	"log"
 	"time"
 
-	"broker_clickhouse/config"
-	"broker_clickhouse/models"
+	"angelone_clickhouse/config"
+	"angelone_clickhouse/models"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
