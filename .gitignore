@@ -2,4 +2,5 @@
 # Ignore environment configuration file
 .env
 
-# ...existing code...
+# Ignore log files
+*.log

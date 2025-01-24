@@ -1,14 +1,28 @@
-# Broker ClickHouse Market Data Storage
+# AngelOne Market Data Processor
 
-A high-performance market data storage system that captures real-time stock market data from AngelOne WebSocket feed and stores it in ClickHouse database.
+High-performance market data processing system that captures real-time stock market data from AngelOne WebSocket feed and stores it in ClickHouse database with concurrent processing and monitoring capabilities.
 
 ## Features
 
+### Core Functionality
 - Real-time market data capture via WebSocket
-- Efficient batch processing of market ticks
-- High-performance storage using ClickHouse
-- Automatic reconnection handling
-- Configurable batch sizes and flush intervals
+- Concurrent processing with worker pools
+- High-performance ClickHouse storage
+- Automatic reconnection and error recovery
+- Binary data parsing for market ticks
+
+### Performance Features
+- Configurable worker pool size
+- Batch processing with configurable sizes
+- Buffer management for high throughput
+- Rate limiting and backoff strategies
+
+### Monitoring & Metrics
+- HTTP endpoint for health checks (/health)
+- Real-time metrics endpoint (/metrics)
+- Daily statistics for each symbol
+- Structured logging with rotation
+- Performance monitoring dashboard
 
 ## Prerequisites
 
@@ -20,7 +34,7 @@ A high-performance market data storage system that captures real-time stock mark
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/broker_clickhouse.git
+git clone https://github.com/crypt0inf0/broker_clickhouse.git
 cd broker_clickhouse
 ```
 
@@ -133,6 +147,31 @@ const (
 Adjust these values based on your requirements:
 - Higher batchSize = Better throughput
 - Lower flushInterval = Lower latency
+
+## Additional Production Requirements
+
+1. Monitoring and Alerting
+- Add Prometheus metrics export
+- Setup alerting thresholds
+- Integration with monitoring systems
+
+2. Security
+- Add API rate limiting
+- Implement request authentication
+- Add input validation
+- Secure credential management
+
+3. Deployment
+- Add Kubernetes manifests
+- Setup CI/CD pipeline
+- Add health checks
+- Resource limits configuration
+
+4. Documentation
+- Add API documentation
+- Add runbook for operations
+- Document failover procedures
+- Add performance tuning guide
 
 ## Contributing
 
