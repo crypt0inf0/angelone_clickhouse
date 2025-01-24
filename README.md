@@ -292,3 +292,5 @@ HAVING delay > INTERVAL 5 MINUTE;
 3. Commit your changes
 4. Push to the branch
 5. Create a new Pull Request
+
+### Credit: https://www.marketcalls.in/python/storing-websocket-stock-market-data-in-clickhouse-using-python-a-comprehensive-guide.html
