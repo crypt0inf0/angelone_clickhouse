@@ -1,14 +1,16 @@
 package db
 
 import (
-    "context"
-    "fmt"
-    "log"
-    "time"
-    
-    "github.com/ClickHouse/clickhouse-go/v2"
-    "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-    "broker_clickhouse/models"
+	"context"
+	"fmt"
+	"log"
+	"time"
+
+	"broker_clickhouse/config"
+	"broker_clickhouse/models"
+
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
 const createTableSQL = `
@@ -26,81 +28,99 @@ ORDER BY timestamp
 `
 
 type ClickHouseDB struct {
-    conn driver.Conn
+	conn   driver.Conn
+	config *config.Config
 }
 
-func NewClickHouseDB(host string, port int, database string, username string, password string) (*ClickHouseDB, error) {
-    conn, err := clickhouse.Open(&clickhouse.Options{
-        Addr: []string{fmt.Sprintf("%s:%d", host, port)},
-        Auth: clickhouse.Auth{
-            Database: username,  // Use username as database name
-            Username: username,
-            Password: password,
-        },
-        Protocol: clickhouse.Native,  // Explicitly set to use native protocol
-        Debug:    true,              // Enable debug logging
-        Settings: clickhouse.Settings{
-            "max_execution_time": 60,
-        },
-    })
-    
-    if err != nil {
-        return nil, fmt.Errorf("failed to connect to ClickHouse: %v", err)
-    }
+func NewClickHouseDB(cfg *config.Config) (*ClickHouseDB, error) {
+	opts := &clickhouse.Options{
+		Addr: []string{fmt.Sprintf("%s:%d", cfg.ClickHouse.Host, cfg.ClickHouse.Port)},
+		Auth: clickhouse.Auth{
+			Database: cfg.ClickHouse.Database,
+			Username: cfg.ClickHouse.User,
+			Password: cfg.ClickHouse.Password,
+		},
+		Protocol: clickhouse.Native,
+		Debug:    cfg.ClickHouse.Debug,
+		Settings: clickhouse.Settings{
+			"max_execution_time": cfg.ClickHouse.QueryTimeout.Seconds(),
+		},
+		DialTimeout:          10 * time.Second,
+		MaxOpenConns:         cfg.ClickHouse.MaxOpenConns,
+		MaxIdleConns:         cfg.ClickHouse.MaxIdleConns,
+		ConnMaxLifetime:      cfg.ClickHouse.ConnMaxLifetime,
+		Compression:          &clickhouse.Compression{
+			Method: clickhouse.CompressionLZ4,
+		},
+		BlockBufferSize:      10,
+		MaxCompressionBuffer: 10 << 20, // 10MB
+	}
 
-    db := &ClickHouseDB{conn: conn}
-    if err := db.createTable(); err != nil {
-        return nil, err
-    }
+	conn, err := clickhouse.Open(opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to ClickHouse: %v", err)
+	}
 
-    return db, nil
+	db := &ClickHouseDB{
+		conn:   conn,
+		config: cfg,
+	}
+
+	if err := db.createTable(); err != nil {
+		return nil, err
+	}
+
+	return db, nil
 }
 
 func (db *ClickHouseDB) createTable() error {
-    return db.conn.Exec(context.Background(), createTableSQL)
+	return db.conn.Exec(context.Background(), createTableSQL)
 }
 
 func (db *ClickHouseDB) InsertTicks(ctx context.Context, ticks []models.MarketTick) error {
-    batch, err := db.conn.PrepareBatch(ctx, "INSERT INTO market_ticks")
-    if (err != nil) {
-        return err
-    }
+	batch, err := db.conn.PrepareBatch(ctx, "INSERT INTO market_ticks")
+	if err != nil {
+		return err
+	}
 
-    for _, tick := range ticks {
-        err := batch.AppendStruct(&tick)
-        if err != nil {
-            return err
-        }
-    }
+	for _, tick := range ticks {
+		err := batch.AppendStruct(&tick)
+		if err != nil {
+			return err
+		}
+	}
 
-    return batch.Send()
+	return batch.Send()
 }
 
 // Add method for single tick insertion
 func (db *ClickHouseDB) InsertTick(ctx context.Context, tick models.MarketTick) error {
-    query := `
+	ctx, cancel := context.WithTimeout(ctx, db.config.ClickHouse.QueryTimeout)
+	defer cancel()
+
+	query := `
         INSERT INTO angelone_market_data (
             token, timestamp, last_traded_price, 
             open_price, high_price, low_price, 
             close_price, volume
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `
-    
-    return db.conn.Exec(ctx, query,
-        tick.Symbol,
-        tick.Timestamp,
-        tick.LastPrice,
-        tick.OpenPrice,
-        tick.HighPrice,
-        tick.LowPrice,
-        tick.ClosePrice,
-        tick.Volume,
-    )
+
+	return db.conn.Exec(ctx, query,
+		tick.Symbol,
+		tick.Timestamp,
+		tick.LastPrice,
+		tick.OpenPrice,
+		tick.HighPrice,
+		tick.LowPrice,
+		tick.ClosePrice,
+		tick.Volume,
+	)
 }
 
 // Add method to verify data storage
 func (db *ClickHouseDB) VerifyLastInserted(ctx context.Context, symbol string) (*models.MarketTick, error) {
-    query := `
+	query := `
         SELECT 
             token, timestamp, last_traded_price, 
             open_price, high_price, low_price, 
@@ -110,30 +130,30 @@ func (db *ClickHouseDB) VerifyLastInserted(ctx context.Context, symbol string) (
         ORDER BY timestamp DESC 
         LIMIT 1
     `
-    
-    var tick models.MarketTick
-    row := db.conn.QueryRow(ctx, query, symbol)
-    err := row.Scan(
-        &tick.Symbol,
-        &tick.Timestamp,
-        &tick.LastPrice,
-        &tick.OpenPrice,
-        &tick.HighPrice,
-        &tick.LowPrice,
-        &tick.ClosePrice,
-        &tick.Volume,
-    )
-    
-    if err != nil {
-        return nil, fmt.Errorf("error verifying data: %v", err)
-    }
-    
-    return &tick, nil
+
+	var tick models.MarketTick
+	row := db.conn.QueryRow(ctx, query, symbol)
+	err := row.Scan(
+		&tick.Symbol,
+		&tick.Timestamp,
+		&tick.LastPrice,
+		&tick.OpenPrice,
+		&tick.HighPrice,
+		&tick.LowPrice,
+		&tick.ClosePrice,
+		&tick.Volume,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("error verifying data: %v", err)
+	}
+
+	return &tick, nil
 }
 
 // Add method to get statistics
 func (db *ClickHouseDB) GetDailyStats(ctx context.Context, symbol string) error {
-    query := `
+	query := `
         SELECT 
             token,
             toDate(timestamp) as date,
@@ -147,28 +167,28 @@ func (db *ClickHouseDB) GetDailyStats(ctx context.Context, symbol string) error 
         ORDER BY date DESC
         LIMIT 1
     `
-    
-    var (
-        token string
-        date time.Time
-        dayLow, dayHigh float64
-        volume, count int64
-    )
-    
-    row := db.conn.QueryRow(ctx, query, symbol)
-    if err := row.Scan(&token, &date, &dayLow, &dayHigh, &volume, &count); err != nil {
-        return fmt.Errorf("error getting stats: %v", err)
-    }
-    
-    log.Printf("Daily Stats [%s] %s: Low: %.2f | High: %.2f | Volume: %d | Ticks: %d",
-        date.Format("2006-01-02"), token, dayLow, dayHigh, volume, count)
-    
-    return nil
+
+	var (
+		token           string
+		date            time.Time
+		dayLow, dayHigh float64
+		volume, count   int64
+	)
+
+	row := db.conn.QueryRow(ctx, query, symbol)
+	if err := row.Scan(&token, &date, &dayLow, &dayHigh, &volume, &count); err != nil {
+		return fmt.Errorf("error getting stats: %v", err)
+	}
+
+	log.Printf("Daily Stats [%s] %s: Low: %.2f | High: %.2f | Volume: %d | Ticks: %d",
+		date.Format("2006-01-02"), token, dayLow, dayHigh, volume, count)
+
+	return nil
 }
 
 // Add method for bulk verification
 func (db *ClickHouseDB) VerifyMultipleTokens(ctx context.Context, tokens []string) error {
-    query := `
+	query := `
         SELECT 
             token,
             max(timestamp) as last_update,
@@ -177,25 +197,25 @@ func (db *ClickHouseDB) VerifyMultipleTokens(ctx context.Context, tokens []strin
         WHERE token IN (?)
         GROUP BY token
     `
-    
-    rows, err := db.conn.Query(ctx, query, tokens)
-    if err != nil {
-        return fmt.Errorf("error querying multiple tokens: %v", err)
-    }
-    defer rows.Close()
 
-    for rows.Next() {
-        var (
-            token string
-            lastUpdate time.Time
-            tickCount int64
-        )
-        if err := rows.Scan(&token, &lastUpdate, &tickCount); err != nil {
-            return err
-        }
-        log.Printf("Token %s: Last update @ %s, Total ticks: %d",
-            token, lastUpdate.Format("15:04:05"), tickCount)
-    }
+	rows, err := db.conn.Query(ctx, query, tokens)
+	if err != nil {
+		return fmt.Errorf("error querying multiple tokens: %v", err)
+	}
+	defer rows.Close()
 
-    return rows.Err()
+	for rows.Next() {
+		var (
+			token      string
+			lastUpdate time.Time
+			tickCount  int64
+		)
+		if err := rows.Scan(&token, &lastUpdate, &tickCount); err != nil {
+			return err
+		}
+		log.Printf("Token %s: Last update @ %s, Total ticks: %d",
+			token, lastUpdate.Format("15:04:05"), tickCount)
+	}
+
+	return rows.Err()
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"broker_clickhouse/angel"
+	"broker_clickhouse/config"
 	"broker_clickhouse/db"
 	"broker_clickhouse/metrics"
 	"broker_clickhouse/models"
@@ -20,11 +21,6 @@ import (
 	"github.com/joho/godotenv"
 )
 
-const (
-	numWorkers = 5  // Number of concurrent workers
-	bufferSize = 1000
-)
-
 type MarketData struct {
 	Token           string  `json:"token"`
 	LastTradedPrice float64 `json:"last_traded_price"`
@@ -37,11 +33,32 @@ type MarketData struct {
 
 // Add channel type for data processing
 type MarketDataChannel struct {
-	data MarketData
+	data       MarketData
 	clickhouse *db.ClickHouseDB
 }
 
 func main() {
+	// Load configuration
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	// Initialize metrics
+	metricsInstance := metrics.NewMetrics(cfg)
+
+	// Initialize DB
+	db, err := db.NewClickHouseDB(cfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+
+	// Initialize worker pool
+	jobs := make(chan MarketDataChannel, cfg.App.BufferSize)
+	for w := 1; w <= cfg.App.NumWorkers; w++ {
+		go processDataWorker(w, jobs, db, metricsInstance)
+	}
+
 	// Initialize logger
 	if err := utils.InitLogger(); err != nil {
 		log.Fatalf("Failed to initialize logger: %v", err)
@@ -62,7 +79,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 		operation := func() error {
-			return runWebSocket(ctx)
+			return runWebSocket(ctx, cfg, metricsInstance)
 		}
 
 		retry := utils.NewExponentialBackoff()
@@ -78,7 +95,9 @@ func main() {
 	// Use request logger middleware
 	metricsMux := http.NewServeMux()
 	metricsMux.HandleFunc("/health", healthCheck)
-	metricsMux.HandleFunc("/metrics", metricsHandler)
+	metricsMux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		metricsHandler(w, r, metricsInstance)
+	})
 
 	server := &http.Server{
 		Addr:    ":8080",
@@ -109,25 +128,26 @@ func processAndStoreData(data MarketData) {
 		data.Volume)
 }
 
-func processDataWorker(id int, jobs <-chan MarketDataChannel) {
+// Update processDataWorker signature and implementation
+func processDataWorker(id int, jobs <-chan MarketDataChannel, db *db.ClickHouseDB, metrics *metrics.Metrics) {
 	for job := range jobs {
 		// Create a MarketTick for ClickHouse storage
 		tick := models.MarketTick{
-			Timestamp:   time.Now(),
-			Symbol:      job.data.Token,
-			LastPrice:   job.data.LastTradedPrice,
-			Volume:      int64(job.data.Volume),
-			OpenPrice:   job.data.OpenPrice,
-			HighPrice:   job.data.HighPrice,
-			LowPrice:    job.data.LowPrice,
-			ClosePrice:  job.data.ClosedPrice,
+			Timestamp:  time.Now(),
+			Symbol:     job.data.Token,
+			LastPrice:  job.data.LastTradedPrice,
+			Volume:     int64(job.data.Volume),
+			OpenPrice:  job.data.OpenPrice,
+			HighPrice:  job.data.HighPrice,
+			LowPrice:   job.data.LowPrice,
+			ClosePrice: job.data.ClosedPrice,
 		}
 
 		// Store tick with retry mechanism
 		if err := job.clickhouse.InsertTick(context.Background(), tick); err != nil {
 			utils.Error(err, "Error storing tick",
 				"worker_id", id,
-				"symbol", job.data.Token,
+				"token", job.data.Token,
 			)
 			metrics.IncrementErrors()
 			continue
@@ -135,17 +155,18 @@ func processDataWorker(id int, jobs <-chan MarketDataChannel) {
 
 		utils.Logger.Infow("Tick stored",
 			"worker_id", id,
-			"symbol", job.data.Token,
+			"token", job.data.Token,
 			"price", job.data.LastTradedPrice,
 		)
 		metrics.IncrementProcessed()
 	}
 }
 
-func runWebSocket(ctx context.Context) error {
+// Update runWebSocket to use configuration consistently
+func runWebSocket(ctx context.Context, cfg *config.Config, metrics *metrics.Metrics) error {
 	// Authenticate with AngelOne
 	authToken, feedToken, err := angel.Authenticate()
-	if (err != nil) {
+	if err != nil {
 		log.Fatalf("Authentication failed: %v", err)
 	}
 
@@ -153,20 +174,8 @@ func runWebSocket(ctx context.Context) error {
 	os.Setenv("ANGEL_AUTH_TOKEN", authToken)
 	os.Setenv("ANGEL_FEED_TOKEN", feedToken)
 
-	// Convert port string to int
-	port, err := strconv.Atoi(os.Getenv("CLICKHOUSE_PORT"))
-	if err != nil {
-		log.Fatalf("Invalid CLICKHOUSE_PORT: %v", err)
-	}
-
-	// Initialize ClickHouse connection with converted port
-	clickhouse, err := db.NewClickHouseDB(
-		os.Getenv("CLICKHOUSE_HOST"),
-		port,
-		os.Getenv("CLICKHOUSE_USER"),
-		os.Getenv("CLICKHOUSE_PASSWORD"),
-		"",
-	)
+	// Initialize ClickHouse connection using config
+	clickhouse, err := db.NewClickHouseDB(cfg)
 	if err != nil {
 		log.Fatalf("Failed to connect to ClickHouse: %v", err)
 	}
@@ -211,7 +220,7 @@ func runWebSocket(ctx context.Context) error {
 	go func() {
 		verifyTicker := time.NewTicker(1 * time.Minute)
 		defer verifyTicker.Stop()
-		
+
 		for range verifyTicker.C {
 			// Verify last stored data
 			tick, err := clickhouse.VerifyLastInserted(context.Background(), "2885")
@@ -219,13 +228,13 @@ func runWebSocket(ctx context.Context) error {
 				log.Printf("Verification error: %v", err)
 				continue
 			}
-			
+
 			// Print verification result
 			log.Printf("Last stored data verified: %s @ %s: %.2f",
 				tick.Symbol,
 				tick.Timestamp.Format("15:04:05"),
 				tick.LastPrice)
-				
+
 			// Get daily statistics
 			if err := clickhouse.GetDailyStats(context.Background(), "2885"); err != nil {
 				log.Printf("Stats error: %v", err)
@@ -234,11 +243,11 @@ func runWebSocket(ctx context.Context) error {
 	}()
 
 	// Create a buffered channel for market data processing
-	jobs := make(chan MarketDataChannel, bufferSize)
+	jobs := make(chan MarketDataChannel, cfg.App.BufferSize)
 
 	// Start worker pool
-	for w := 1; w <= numWorkers; w++ {
-		go processDataWorker(w, jobs)
+	for w := 1; w <= cfg.App.NumWorkers; w++ {
+		go processDataWorker(w, jobs, clickhouse, metrics)
 	}
 
 	// Multiple tokens to subscribe
@@ -268,7 +277,7 @@ func runWebSocket(ctx context.Context) error {
 	// Update message handling for concurrent processing
 	wsClient.OnMessage = func(message []byte) {
 		data, err := parser.ParseBinaryData(message)
-		if (err != nil) {
+		if err != nil {
 			log.Printf("Error parsing binary data: %v", err)
 			return
 		}
@@ -316,15 +325,14 @@ func healthCheck(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"ok"}`))
 }
 
-// Add metrics handler
-func metricsHandler(w http.ResponseWriter, r *http.Request) {
+// Update metricsHandler to use metrics instance
+func metricsHandler(w http.ResponseWriter, r *http.Request, metrics *metrics.Metrics) {
 	w.Header().Set("Content-Type", "text/plain")
 	processed, errors, lastProc, uptime := metrics.GetStats()
 	w.Write([]byte(
 		"market_data_processed_total " + strconv.FormatUint(processed, 10) + "\n" +
-		"market_data_errors_total " + strconv.FormatUint(errors, 10) + "\n" +
-		"market_data_last_processed_timestamp " + strconv.FormatInt(lastProc.Unix(), 10) + "\n" +
-		"market_data_uptime_seconds " + strconv.FormatFloat(uptime.Seconds(), 'f', 1, 64) + "\n",
+			"market_data_errors_total " + strconv.FormatUint(errors, 10) + "\n" +
+			"market_data_last_processed_timestamp " + strconv.FormatInt(lastProc.Unix(), 10) + "\n" +
+			"market_data_uptime_seconds " + strconv.FormatFloat(uptime.Seconds(), 'f', 1, 64) + "\n",
 	))
 }
-
