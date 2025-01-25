@@ -1,28 +1,29 @@
 # AngelOne Market Data Processor
 
-High-performance market data processing system that captures real-time stock market data from AngelOne WebSocket feed and stores it in ClickHouse database with concurrent processing and monitoring capabilities.
+Real-time market data processing system that captures data from AngelOne's WebSocket feed and stores it in ClickHouse database with concurrent processing and monitoring capabilities.
 
 ## Features
 
-### Core Functionality
+### Core Features
 - Real-time market data capture via WebSocket
-- Concurrent processing with worker pools
+- Multi-exchange support (NSE, BSE, MCX)
+- Configurable token subscriptions via JSON
 - High-performance ClickHouse storage
-- Automatic reconnection and error recovery
+- Circuit breaker pattern for failure handling
 - Binary data parsing for market ticks
 
 ### Performance Features
-- Configurable worker pool size
+- Concurrent processing with configurable worker pools
 - Batch processing with configurable sizes
 - Buffer management for high throughput
 - Rate limiting and backoff strategies
 
-### Monitoring & Metrics
-- HTTP endpoint for health checks (/health)
-- Real-time metrics endpoint (/metrics)
-- Daily statistics for each symbol
+### Monitoring & Reliability
+- Prometheus metrics integration
+- Health check endpoints
 - Structured logging with rotation
-- Performance monitoring dashboard
+- Automatic reconnection handling
+- Error recovery middleware
 
 ## Prerequisites
 
@@ -30,17 +31,22 @@ High-performance market data processing system that captures real-time stock mar
 - Docker
 - AngelOne Trading Account
 
-## Installation
+## Installation & Setup
 
-1. Clone the repository:
+1. Clone and setup:
 ```bash
 git clone https://github.com/crypt0inf0/angelone_clickhouse.git
 cd angelone_clickhouse
+go mod tidy
 ```
 
-2. Install dependencies:
+2. Configure ClickHouse:
 ```bash
-go mod tidy
+docker run -d \
+    --name clickhouse \
+    -p 9000:9000 \
+    -v clickhouse_data:/var/lib/clickhouse \
+    clickhouse/clickhouse-server
 ```
 
 3. Set up ClickHouse using Docker:
@@ -53,31 +59,64 @@ docker run -d \
 ```
 
 4. Configure environment variables:
+# Edit .env with your AngelOne credentials and ClickHouse configuration
 ```bash
 cp .env.example .env
-# Edit .env with your AngelOne credentials and ClickHouse configuration
 ```
 
 ## Configuration
 
-Update the `.env` file with your credentials:
+### Token Configuration
+Create `config/tokens.json`:
+```json
+[
+    {
+        "symbol": "RELIANCE",
+        "token": "2885",
+        "exchange": "NSE_CM"
+    },
+    {
+        "symbol": "NIFTY25JAN23200PE",
+        "token": "43607",
+        "exchange": "NSE_FO"
+    }
+]
+```
 
+### Exchange Types
+```go
+NSE_CM = 1  // NSE Cash Market
+NSE_FO = 2  // NSE F&O
+BSE_CM = 3  // BSE Cash Market
+BSE_FO = 4  // BSE F&O
+MCX_FO = 5  // MCX F&O
+NCX_FO = 7  // NCX F&O
+CDE_FO = 13 // Currency Derivatives
+```
+
+### Environment Variables
 ```properties
 # AngelOne credentials
-ANGEL_CLIENT_ID=your_client_id
-ANGEL_CLIENT_PIN=your_pin
-ANGEL_TOTP_CODE=your_totp_code
-ANGEL_API_KEY=your_api_key
-ANGEL_CLIENT_LOCAL_IP=localhost
-ANGEL_CLIENT_PUBLIC_IP=your_public_ip
-ANGEL_MAC_ADDRESS=your_mac_address
-ANGEL_STATE_VARIABLE=your_state_variable
+ANGEL_CLIENT_ID=YOUR_CLIENT_ID
+ANGEL_CLIENT_PIN=YOUR_PIN
+ANGEL_TOTP_CODE=YOUR_TOTP_CODE
+ANGEL_API_KEY=YOUR_API_KEY
+ANGEL_CLIENT_LOCAL_IP=YOUR_LOCAL_IP
+ANGEL_CLIENT_PUBLIC_IP=YOUR_PUBLIC_IP
+ANGEL_MAC_ADDRESS=YOUR_MAC_ADDRESS
+ANGEL_STATE_VARIABLE=YOUR_STATE_VARIABLE
 
 # ClickHouse configuration
 CLICKHOUSE_HOST=localhost
 CLICKHOUSE_PORT=9000
 CLICKHOUSE_USER=default
 CLICKHOUSE_PASSWORD=
+
+# Application Settings
+BATCH_SIZE=1000           # Number of ticks per batch
+FLUSH_INTERVAL=5          # Seconds between forced flushes
+MAX_QUEUE_SIZE=10000      # Maximum number of pending ticks
+NUM_WORKERS=5             # Number of concurrent workers
 ```
 
 ## Usage
@@ -217,53 +256,40 @@ GROUP BY token, price_level
 ORDER BY price_level DESC;
 ```
 
-## Monitoring Metrics
+## Monitoring
 
-Available Prometheus metrics:
+### Available Metrics
+- `market_data_processed_total`: Total processed ticks
+- `market_data_errors_total`: Total error count
+- `market_data_last_processed_timestamp`: Last tick timestamp
+- `market_data_uptime_seconds`: Application uptime
 
-- `angelone_market_data_processed_ticks_total`
-- `angelone_market_data_error_count_total`
-- `angelone_market_data_tick_processing_seconds`
-- `angelone_market_data_batch_size_current`
-
-## Health Checks
-
-### Database Connectivity:
+### Health Check
 ```bash
 curl http://localhost:8080/health
 ```
+
+### Metrics Endpoint
 ```bash
 curl http://localhost:8080/metrics
 ```
 
-### Latest Data Verification:
-```sql
-SELECT
-    token,
-    max(timestamp) as last_update,
-    now() - max(timestamp) as delay
-FROM angelone_market_data
-GROUP BY token
-HAVING delay > INTERVAL 5 MINUTE;
-```
-
 ## Error Handling
 
-### Common Error Scenarios and Solutions
+### Common Issues
+1. WebSocket Disconnection
+   - Automatic reconnection with exponential backoff
+   - State recovery and data gap detection
 
-#### WebSocket Disconnection
-- Automatic reconnection with exponential backoff
-- State recovery and data gap detection
+2. Database Connection Issues
+   - Connection pooling with automatic recovery
+   - Query timeout handling
+   - Batch insert retry logic
 
-#### Database Connection Issues
-- Connection pooling with automatic recovery
-- Query timeout handling
-- Batch insert retry logic
-
-#### Rate Limiting
-- Smart backoff strategy
-- Queue management
-- Throughput monitoring
+3. Rate Limiting
+   - Smart backoff strategy
+   - Queue management
+   - Throughput monitoring
 
 ## Production Checklist
 
@@ -288,9 +314,17 @@ HAVING delay > INTERVAL 5 MINUTE;
 ## Contributing
 
 1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a new Pull Request
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-### Credit: https://www.marketcalls.in/python/storing-websocket-stock-market-data-in-clickhouse-using-python-a-comprehensive-guide.html
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgments
+
+- AngelOne SmartAPI Documentation
+- ClickHouse Documentation
+- Market data processing best practices from [marketcalls.in](https://www.marketcalls.in/python/storing-websocket-stock-market-data-in-clickhouse-using-python-a-comprehensive-guide.html)

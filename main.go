@@ -10,6 +10,8 @@ import (
 	"angelone_clickhouse/utils"
 	"angelone_clickhouse/ws"
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -162,6 +164,32 @@ func processDataWorker(id int, jobs <-chan MarketDataChannel, db *db.ClickHouseD
 	}
 }
 
+// Add loadTokenConfig function
+func loadTokenConfig() (map[int][]string, error) {
+	file, err := os.ReadFile("config/tokens.json")
+	if err != nil {
+		return nil, fmt.Errorf("error reading tokens file: %v", err)
+	}
+
+	var tokens []models.TokenConfig
+	if err := json.Unmarshal(file, &tokens); err != nil {
+		return nil, fmt.Errorf("error parsing tokens json: %v", err)
+	}
+
+	// Group tokens by exchange type
+	exchangeTokens := make(map[int][]string)
+	for _, token := range tokens {
+		exchangeType, exists := models.ExchangeMap[token.Exchange]
+		if !exists {
+			log.Printf("Warning: Unknown exchange type %s for token %s", token.Exchange, token.Token)
+			continue
+		}
+		exchangeTokens[exchangeType] = append(exchangeTokens[exchangeType], token.Token)
+	}
+
+	return exchangeTokens, nil
+}
+
 // Update runWebSocket to use configuration consistently
 func runWebSocket(ctx context.Context, cfg *config.Config, metrics *metrics.Metrics) error {
 	// Authenticate with AngelOne
@@ -250,27 +278,28 @@ func runWebSocket(ctx context.Context, cfg *config.Config, metrics *metrics.Metr
 		go processDataWorker(w, jobs, clickhouse, metrics)
 	}
 
-	// Multiple tokens to subscribe
-	tokens := []string{
-		"2885",  // RELIANCE
-		"1594",  // INFY
-		"11536", // TCS
-		"3045",  // SBIN
-		"3787",  // HDFCBANK
+	// Load token configuration
+	exchangeTokens, err := loadTokenConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load token configuration: %v", err)
 	}
 
-	// Subscribe to market data for multiple tokens
+	// Create subscription requests for each exchange type
+	var tokenList []angel.TokenSubscription
+	for exchangeType, tokens := range exchangeTokens {
+		tokenList = append(tokenList, angel.TokenSubscription{
+			ExchangeType: exchangeType,
+			Tokens:      tokens,
+		})
+	}
+
+	// Subscribe to market data
 	subscribeReq := angel.SubscribeRequest{
 		CorrelationID: "ws_test",
-		Action:        1,
+		Action:        models.SubscribeAction,
 		Params: angel.SubscriptionParams{
-			Mode: 2,
-			TokenList: []angel.TokenSubscription{
-				{
-					ExchangeType: 1,
-					Tokens:       tokens,
-				},
-			},
+			Mode:      models.QuoteMode,
+			TokenList: tokenList,
 		},
 	}
 
